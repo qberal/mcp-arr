@@ -84,6 +84,61 @@ export interface Series {
   };
 }
 
+export interface Episode {
+  id: number;
+  seriesId: number;
+  tvdbId: number;
+  episodeFileId: number;
+  seasonNumber: number;
+  episodeNumber: number;
+  title: string;
+  airDate: string;
+  airDateUtc: string;
+  overview: string;
+  hasFile: boolean;
+  monitored: boolean;
+  absoluteEpisodeNumber: number;
+  unverifiedSceneNumbering: boolean;
+  episodeFile?: {
+    id: number;
+    relativePath: string;
+    path: string;
+    size: number;
+    dateAdded: string;
+    quality: { quality: { id: number; name: string } };
+  };
+}
+
+export interface Book {
+  id: number;
+  title: string;
+  authorId: number;
+  foreignBookId: string;
+  titleSlug: string;
+  overview: string;
+  releaseDate: string;
+  pageCount: number;
+  monitored: boolean;
+  grabbed: boolean;
+  ratings: { votes: number; value: number };
+  editions: Array<{
+    id: number;
+    bookId: number;
+    foreignEditionId: string;
+    title: string;
+    pageCount: number;
+    isEbook: boolean;
+    monitored: boolean;
+  }>;
+  statistics?: {
+    bookFileCount: number;
+    bookCount: number;
+    totalBookCount: number;
+    sizeOnDisk: number;
+    percentOfBooks: number;
+  };
+}
+
 export interface Movie {
   id: number;
   title: string;
@@ -387,12 +442,36 @@ export class SonarrClient extends ArrClient {
   /**
    * Trigger a search for missing episodes
    */
-  async searchMissing(seriesId: number): Promise<void> {
-    await this['request']('/command', {
+  async searchMissing(seriesId: number): Promise<{ id: number }> {
+    return this['request']<{ id: number }>('/command', {
       method: 'POST',
       body: JSON.stringify({
         name: 'SeriesSearch',
         seriesId,
+      }),
+    });
+  }
+
+  /**
+   * Get episodes for a series, optionally filtered by season
+   */
+  async getEpisodes(seriesId: number, seasonNumber?: number): Promise<Episode[]> {
+    let url = `/episode?seriesId=${seriesId}`;
+    if (seasonNumber !== undefined) {
+      url += `&seasonNumber=${seasonNumber}`;
+    }
+    return this['request']<Episode[]>(url);
+  }
+
+  /**
+   * Search for a specific episode
+   */
+  async searchEpisode(episodeIds: number[]): Promise<{ id: number }> {
+    return this['request']<{ id: number }>('/command', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'EpisodeSearch',
+        episodeIds,
       }),
     });
   }
@@ -443,8 +522,8 @@ export class RadarrClient extends ArrClient {
   /**
    * Trigger a search for a movie
    */
-  async searchMovie(movieId: number): Promise<void> {
-    await this['request']('/command', {
+  async searchMovie(movieId: number): Promise<{ id: number }> {
+    return this['request']<{ id: number }>('/command', {
       method: 'POST',
       body: JSON.stringify({
         name: 'MoviesSearch',
@@ -537,6 +616,17 @@ export class LidarrClient extends ArrClient {
       }),
     });
   }
+
+  /**
+   * Get calendar (upcoming album releases)
+   */
+  async getCalendar(start?: string, end?: string): Promise<Album[]> {
+    const params = new URLSearchParams();
+    if (start) params.append('start', start);
+    if (end) params.append('end', end);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this['request']<Album[]>(`/calendar${query}`);
+  }
 }
 
 export class ReadarrClient extends ArrClient {
@@ -581,6 +671,73 @@ export class ReadarrClient extends ArrClient {
       }),
     });
   }
+
+  /**
+   * Get books for an author
+   */
+  async getBooks(authorId?: number): Promise<Book[]> {
+    const url = authorId ? `/book?authorId=${authorId}` : '/book';
+    return this['request']<Book[]>(url);
+  }
+
+  /**
+   * Get a specific book
+   */
+  async getBookById(id: number): Promise<Book> {
+    return this['request']<Book>(`/book/${id}`);
+  }
+
+  /**
+   * Search for missing books for an author
+   */
+  async searchMissingBooks(authorId: number): Promise<{ id: number }> {
+    return this['request']<{ id: number }>('/command', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'AuthorSearch',
+        authorId,
+      }),
+    });
+  }
+
+  /**
+   * Search for a specific book
+   */
+  async searchBook(bookIds: number[]): Promise<{ id: number }> {
+    return this['request']<{ id: number }>('/command', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'BookSearch',
+        bookIds,
+      }),
+    });
+  }
+
+  /**
+   * Get calendar (upcoming book releases)
+   */
+  async getCalendar(start?: string, end?: string): Promise<Book[]> {
+    const params = new URLSearchParams();
+    if (start) params.append('start', start);
+    if (end) params.append('end', end);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this['request']<Book[]>(`/calendar${query}`);
+  }
+}
+
+export interface IndexerStats {
+  id: number;
+  indexerId: number;
+  indexerName: string;
+  averageResponseTime: number;
+  numberOfQueries: number;
+  numberOfGrabs: number;
+  numberOfRssQueries: number;
+  numberOfAuthQueries: number;
+  numberOfFailedQueries: number;
+  numberOfFailedGrabs: number;
+  numberOfFailedRssQueries: number;
+  numberOfFailedAuthQueries: number;
 }
 
 export class ProwlarrClient extends ArrClient {
@@ -599,8 +756,22 @@ export class ProwlarrClient extends ArrClient {
   /**
    * Test all indexers
    */
-  async testAllIndexers(): Promise<void> {
-    await this['request']('/indexer/testall', { method: 'POST' });
+  async testAllIndexers(): Promise<Array<{ id: number; isValid: boolean; validationFailures: Array<{ propertyName: string; errorMessage: string }> }>> {
+    return this['request']<Array<{ id: number; isValid: boolean; validationFailures: Array<{ propertyName: string; errorMessage: string }> }>>('/indexer/testall', { method: 'POST' });
+  }
+
+  /**
+   * Test a specific indexer
+   */
+  async testIndexer(indexerId: number): Promise<{ id: number; isValid: boolean; validationFailures: Array<{ propertyName: string; errorMessage: string }> }> {
+    return this['request']<{ id: number; isValid: boolean; validationFailures: Array<{ propertyName: string; errorMessage: string }> }>(`/indexer/${indexerId}/test`, { method: 'POST' });
+  }
+
+  /**
+   * Get indexer statistics
+   */
+  async getIndexerStats(): Promise<{ indexers: IndexerStats[] }> {
+    return this['request']<{ indexers: IndexerStats[] }>('/indexerstats');
   }
 
   /**

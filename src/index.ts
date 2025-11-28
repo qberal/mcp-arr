@@ -146,6 +146,53 @@ if (clients.sonarr) {
         },
         required: [],
       },
+    },
+    {
+      name: "sonarr_get_episodes",
+      description: "Get episodes for a TV series. Shows which episodes are available and which are missing.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          seriesId: {
+            type: "number",
+            description: "Series ID to get episodes for",
+          },
+          seasonNumber: {
+            type: "number",
+            description: "Optional: filter to a specific season",
+          },
+        },
+        required: ["seriesId"],
+      },
+    },
+    {
+      name: "sonarr_search_missing",
+      description: "Trigger a search for all missing episodes in a series",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          seriesId: {
+            type: "number",
+            description: "Series ID to search for missing episodes",
+          },
+        },
+        required: ["seriesId"],
+      },
+    },
+    {
+      name: "sonarr_search_episode",
+      description: "Trigger a search for specific episode(s)",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          episodeIds: {
+            type: "array",
+            items: { type: "number" },
+            description: "Episode ID(s) to search for",
+          },
+        },
+        required: ["episodeIds"],
+      },
     }
   );
 }
@@ -197,6 +244,20 @@ if (clients.radarr) {
           },
         },
         required: [],
+      },
+    },
+    {
+      name: "radarr_search_movie",
+      description: "Trigger a search to download a movie that's already in your library",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          movieId: {
+            type: "number",
+            description: "Movie ID to search for",
+          },
+        },
+        required: ["movieId"],
       },
     }
   );
@@ -278,6 +339,20 @@ if (clients.lidarr) {
         },
         required: ["artistId"],
       },
+    },
+    {
+      name: "lidarr_get_calendar",
+      description: "Get upcoming album releases from Lidarr",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          days: {
+            type: "number",
+            description: "Number of days to look ahead (default: 30)",
+          },
+        },
+        required: [],
+      },
     }
   );
 }
@@ -316,6 +391,63 @@ if (clients.readarr) {
         properties: {},
         required: [],
       },
+    },
+    {
+      name: "readarr_get_books",
+      description: "Get books for an author in Readarr. Shows which books are available and which are missing.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          authorId: {
+            type: "number",
+            description: "Author ID to get books for",
+          },
+        },
+        required: ["authorId"],
+      },
+    },
+    {
+      name: "readarr_search_book",
+      description: "Trigger a search for a specific book to download",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          bookIds: {
+            type: "array",
+            items: { type: "number" },
+            description: "Book ID(s) to search for",
+          },
+        },
+        required: ["bookIds"],
+      },
+    },
+    {
+      name: "readarr_search_missing",
+      description: "Trigger a search for all missing books for an author",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          authorId: {
+            type: "number",
+            description: "Author ID to search missing books for",
+          },
+        },
+        required: ["authorId"],
+      },
+    },
+    {
+      name: "readarr_get_calendar",
+      description: "Get upcoming book releases from Readarr",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          days: {
+            type: "number",
+            description: "Number of days to look ahead (default: 30)",
+          },
+        },
+        required: [],
+      },
     }
   );
 }
@@ -344,6 +476,24 @@ if (clients.prowlarr) {
           },
         },
         required: ["query"],
+      },
+    },
+    {
+      name: "prowlarr_test_indexers",
+      description: "Test all indexers and return their health status",
+      inputSchema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "prowlarr_get_stats",
+      description: "Get indexer statistics (queries, grabs, failures)",
+      inputSchema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
       },
     }
   );
@@ -498,6 +648,61 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "sonarr_get_episodes": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const { seriesId, seasonNumber } = args as { seriesId: number; seasonNumber?: number };
+        const episodes = await clients.sonarr.getEpisodes(seriesId, seasonNumber);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              count: episodes.length,
+              episodes: episodes.map(e => ({
+                id: e.id,
+                seasonNumber: e.seasonNumber,
+                episodeNumber: e.episodeNumber,
+                title: e.title,
+                airDate: e.airDate,
+                hasFile: e.hasFile,
+                monitored: e.monitored,
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "sonarr_search_missing": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const seriesId = (args as { seriesId: number }).seriesId;
+        const result = await clients.sonarr.searchMissing(seriesId);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Search triggered for missing episodes`,
+              commandId: result.id,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "sonarr_search_episode": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const episodeIds = (args as { episodeIds: number[] }).episodeIds;
+        const result = await clients.sonarr.searchEpisode(episodeIds);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Search triggered for ${episodeIds.length} episode(s)`,
+              commandId: result.id,
+            }, null, 2),
+          }],
+        };
+      }
+
       // Radarr handlers
       case "radarr_get_movies": {
         if (!clients.radarr) throw new Error("Radarr not configured");
@@ -571,6 +776,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const calendar = await clients.radarr.getCalendar(start, end);
         return {
           content: [{ type: "text", text: JSON.stringify(calendar, null, 2) }],
+        };
+      }
+
+      case "radarr_search_movie": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const movieId = (args as { movieId: number }).movieId;
+        const result = await clients.radarr.searchMovie(movieId);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Search triggered for movie`,
+              commandId: result.id,
+            }, null, 2),
+          }],
         };
       }
 
@@ -693,6 +914,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "lidarr_get_calendar": {
+        if (!clients.lidarr) throw new Error("Lidarr not configured");
+        const days = (args as { days?: number })?.days || 30;
+        const start = new Date().toISOString().split('T')[0];
+        const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const calendar = await clients.lidarr.getCalendar(start, end);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              count: calendar.length,
+              albums: calendar.map(a => ({
+                id: a.id,
+                title: a.title,
+                artistId: a.artistId,
+                releaseDate: a.releaseDate,
+                albumType: a.albumType,
+                monitored: a.monitored,
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+
       // Readarr handlers
       case "readarr_get_authors": {
         if (!clients.readarr) throw new Error("Readarr not configured");
@@ -754,6 +999,85 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "readarr_get_books": {
+        if (!clients.readarr) throw new Error("Readarr not configured");
+        const authorId = (args as { authorId: number }).authorId;
+        const books = await clients.readarr.getBooks(authorId);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              count: books.length,
+              books: books.map(b => ({
+                id: b.id,
+                title: b.title,
+                releaseDate: b.releaseDate,
+                pageCount: b.pageCount,
+                monitored: b.monitored,
+                hasFile: b.statistics ? b.statistics.bookFileCount > 0 : false,
+                sizeOnDisk: formatBytes(b.statistics?.sizeOnDisk || 0),
+                grabbed: b.grabbed,
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "readarr_search_book": {
+        if (!clients.readarr) throw new Error("Readarr not configured");
+        const bookIds = (args as { bookIds: number[] }).bookIds;
+        const result = await clients.readarr.searchBook(bookIds);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Search triggered for ${bookIds.length} book(s)`,
+              commandId: result.id,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "readarr_search_missing": {
+        if (!clients.readarr) throw new Error("Readarr not configured");
+        const authorId = (args as { authorId: number }).authorId;
+        const result = await clients.readarr.searchMissingBooks(authorId);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Search triggered for missing books`,
+              commandId: result.id,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "readarr_get_calendar": {
+        if (!clients.readarr) throw new Error("Readarr not configured");
+        const days = (args as { days?: number })?.days || 30;
+        const start = new Date().toISOString().split('T')[0];
+        const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const calendar = await clients.readarr.getCalendar(start, end);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              count: calendar.length,
+              books: calendar.map(b => ({
+                id: b.id,
+                title: b.title,
+                authorId: b.authorId,
+                releaseDate: b.releaseDate,
+                monitored: b.monitored,
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+
       // Prowlarr handlers
       case "prowlarr_get_indexers": {
         if (!clients.prowlarr) throw new Error("Prowlarr not configured");
@@ -783,6 +1107,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const results = await clients.prowlarr.search(query);
         return {
           content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+        };
+      }
+
+      case "prowlarr_test_indexers": {
+        if (!clients.prowlarr) throw new Error("Prowlarr not configured");
+        const results = await clients.prowlarr.testAllIndexers();
+        const indexers = await clients.prowlarr.getIndexers();
+        const indexerMap = new Map(indexers.map(i => [i.id, i.name]));
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              count: results.length,
+              indexers: results.map(r => ({
+                id: r.id,
+                name: indexerMap.get(r.id) || 'Unknown',
+                isValid: r.isValid,
+                errors: r.validationFailures.map(f => f.errorMessage),
+              })),
+              healthy: results.filter(r => r.isValid).length,
+              failed: results.filter(r => !r.isValid).length,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "prowlarr_get_stats": {
+        if (!clients.prowlarr) throw new Error("Prowlarr not configured");
+        const stats = await clients.prowlarr.getIndexerStats();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              count: stats.indexers.length,
+              indexers: stats.indexers.map(s => ({
+                name: s.indexerName,
+                queries: s.numberOfQueries,
+                grabs: s.numberOfGrabs,
+                failedQueries: s.numberOfFailedQueries,
+                failedGrabs: s.numberOfFailedGrabs,
+                avgResponseTime: s.averageResponseTime + 'ms',
+              })),
+              totals: {
+                queries: stats.indexers.reduce((sum, s) => sum + s.numberOfQueries, 0),
+                grabs: stats.indexers.reduce((sum, s) => sum + s.numberOfGrabs, 0),
+                failedQueries: stats.indexers.reduce((sum, s) => sum + s.numberOfFailedQueries, 0),
+                failedGrabs: stats.indexers.reduce((sum, s) => sum + s.numberOfFailedGrabs, 0),
+              },
+            }, null, 2),
+          }],
         };
       }
 
