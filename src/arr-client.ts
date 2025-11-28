@@ -217,6 +217,7 @@ export interface SearchResult {
 export class ArrClient {
   private config: ArrConfig;
   private serviceName: ArrService;
+  protected apiVersion: string = 'v3';
 
   constructor(serviceName: ArrService, config: ArrConfig) {
     this.serviceName = serviceName;
@@ -229,8 +230,8 @@ export class ArrClient {
   /**
    * Make an API request
    */
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.config.url}/api/v3${endpoint}`;
+  protected async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const url = `${this.config.url}/api/${this.apiVersion}${endpoint}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Api-Key': this.config.apiKey,
@@ -420,6 +421,7 @@ export class RadarrClient extends ArrClient {
 export class LidarrClient extends ArrClient {
   constructor(config: ArrConfig) {
     super('lidarr', config);
+    this.apiVersion = 'v1';
   }
 
   /**
@@ -463,6 +465,7 @@ export class LidarrClient extends ArrClient {
 export class ReadarrClient extends ArrClient {
   constructor(config: ArrConfig) {
     super('readarr', config);
+    this.apiVersion = 'v1';
   }
 
   /**
@@ -506,6 +509,7 @@ export class ReadarrClient extends ArrClient {
 export class ProwlarrClient extends ArrClient {
   constructor(config: ArrConfig) {
     super('prowlarr', config);
+    this.apiVersion = 'v1';
   }
 
   /**
