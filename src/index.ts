@@ -2116,7 +2116,7 @@ app.post('/messages', async (req, res) => {
     return;
   }
 
-  await transport.handlePostMessage(req, res);
+  await transport.handlePostMessage(req, res, req.body);
 });
 
 app.get('/', async (req, res) => {
