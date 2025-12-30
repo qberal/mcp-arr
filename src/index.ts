@@ -13,8 +13,9 @@
  * - PROWLARR_URL, PROWLARR_API_KEY
  */
 
+import express from "express";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -733,1312 +734,1315 @@ TOOLS.push(
   }
 );
 
-// Create server instance
-const server = new Server(
-  {
-    name: "mcp-arr",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
+// Create server instance factory
+function createMcpServer() {
+  const server = new Server(
+    {
+      name: "mcp-arr",
+      version: "1.0.0",
     },
-  }
-);
+    {
+      capabilities: {
+        tools: {},
+      },
+    }
+  );
 
-// Handle list tools request
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: TOOLS };
-});
+  // Handle list tools request
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    return { tools: TOOLS };
+  });
 
-// Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  // Handle tool calls
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
 
-  try {
-    switch (name) {
-      case "arr_status": {
-        const statuses: Record<string, unknown> = {};
-        for (const service of configuredServices) {
-          try {
-            const client = clients[service.name];
-            if (client) {
-              const status = await client.getStatus();
+    try {
+      switch (name) {
+        case "arr_status": {
+          const statuses: Record<string, unknown> = {};
+          for (const service of configuredServices) {
+            try {
+              const client = clients[service.name];
+              if (client) {
+                const status = await client.getStatus();
+                statuses[service.name] = {
+                  configured: true,
+                  connected: true,
+                  version: status.version,
+                  appName: status.appName,
+                };
+              }
+            } catch (error) {
               statuses[service.name] = {
                 configured: true,
-                connected: true,
-                version: status.version,
-                appName: status.appName,
+                connected: false,
+                error: error instanceof Error ? error.message : String(error),
               };
             }
-          } catch (error) {
-            statuses[service.name] = {
-              configured: true,
-              connected: false,
-              error: error instanceof Error ? error.message : String(error),
-            };
           }
-        }
-        // Add unconfigured services
-        for (const service of services) {
-          if (!statuses[service.name]) {
-            statuses[service.name] = { configured: false };
+          // Add unconfigured services
+          for (const service of services) {
+            if (!statuses[service.name]) {
+              statuses[service.name] = { configured: false };
+            }
           }
+          return {
+            content: [{ type: "text", text: JSON.stringify(statuses, null, 2) }],
+          };
         }
-        return {
-          content: [{ type: "text", text: JSON.stringify(statuses, null, 2) }],
-        };
-      }
 
-      // Dynamic config tool handlers
-      // Quality Profiles
-      case "sonarr_get_quality_profiles":
-      case "radarr_get_quality_profiles":
-      case "lidarr_get_quality_profiles":
-      case "readarr_get_quality_profiles": {
-        const serviceName = name.split('_')[0] as keyof typeof clients;
-        const client = clients[serviceName];
-        if (!client) throw new Error(`${serviceName} not configured`);
-        const profiles = await client.getQualityProfiles();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: profiles.length,
-              profiles: profiles.map(p => ({
-                id: p.id,
-                name: p.name,
-                upgradeAllowed: p.upgradeAllowed,
-                cutoff: p.cutoff,
-                allowedQualities: p.items
-                  .filter(i => i.allowed)
-                  .map(i => i.quality?.name || i.name || (i.items?.map(q => q.quality.name).join(', ')))
-                  .filter(Boolean),
-                customFormats: p.formatItems?.filter(f => f.score !== 0).map(f => ({
-                  name: f.name,
-                  score: f.score,
-                })) || [],
-                minFormatScore: p.minFormatScore,
-                cutoffFormatScore: p.cutoffFormatScore,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
+        // Dynamic config tool handlers
+        // Quality Profiles
+        case "sonarr_get_quality_profiles":
+        case "radarr_get_quality_profiles":
+        case "lidarr_get_quality_profiles":
+        case "readarr_get_quality_profiles": {
+          const serviceName = name.split('_')[0] as keyof typeof clients;
+          const client = clients[serviceName];
+          if (!client) throw new Error(`${serviceName} not configured`);
+          const profiles = await client.getQualityProfiles();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: profiles.length,
+                profiles: profiles.map(p => ({
+                  id: p.id,
+                  name: p.name,
+                  upgradeAllowed: p.upgradeAllowed,
+                  cutoff: p.cutoff,
+                  allowedQualities: p.items
+                    .filter(i => i.allowed)
+                    .map(i => i.quality?.name || i.name || (i.items?.map(q => q.quality.name).join(', ')))
+                    .filter(Boolean),
+                  customFormats: p.formatItems?.filter(f => f.score !== 0).map(f => ({
+                    name: f.name,
+                    score: f.score,
+                  })) || [],
+                  minFormatScore: p.minFormatScore,
+                  cutoffFormatScore: p.cutoffFormatScore,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
 
-      // Health checks
-      case "sonarr_get_health":
-      case "radarr_get_health":
-      case "lidarr_get_health":
-      case "readarr_get_health": {
-        const serviceName = name.split('_')[0] as keyof typeof clients;
-        const client = clients[serviceName];
-        if (!client) throw new Error(`${serviceName} not configured`);
-        const health = await client.getHealth();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
+        // Health checks
+        case "sonarr_get_health":
+        case "radarr_get_health":
+        case "lidarr_get_health":
+        case "readarr_get_health": {
+          const serviceName = name.split('_')[0] as keyof typeof clients;
+          const client = clients[serviceName];
+          if (!client) throw new Error(`${serviceName} not configured`);
+          const health = await client.getHealth();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                issueCount: health.length,
+                issues: health.map(h => ({
+                  source: h.source,
+                  type: h.type,
+                  message: h.message,
+                  wikiUrl: h.wikiUrl,
+                })),
+                status: health.length === 0 ? 'healthy' : 'issues detected',
+              }, null, 2),
+            }],
+          };
+        }
+
+        // Root folders
+        case "sonarr_get_root_folders":
+        case "radarr_get_root_folders":
+        case "lidarr_get_root_folders":
+        case "readarr_get_root_folders": {
+          const serviceName = name.split('_')[0] as keyof typeof clients;
+          const client = clients[serviceName];
+          if (!client) throw new Error(`${serviceName} not configured`);
+          const folders = await client.getRootFoldersDetailed();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: folders.length,
+                folders: folders.map(f => ({
+                  id: f.id,
+                  path: f.path,
+                  accessible: f.accessible,
+                  freeSpace: formatBytes(f.freeSpace),
+                  freeSpaceBytes: f.freeSpace,
+                  unmappedFolders: f.unmappedFolders?.length || 0,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        // Download clients
+        case "sonarr_get_download_clients":
+        case "radarr_get_download_clients":
+        case "lidarr_get_download_clients":
+        case "readarr_get_download_clients": {
+          const serviceName = name.split('_')[0] as keyof typeof clients;
+          const client = clients[serviceName];
+          if (!client) throw new Error(`${serviceName} not configured`);
+          const downloadClients = await client.getDownloadClients();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: downloadClients.length,
+                clients: downloadClients.map(c => ({
+                  id: c.id,
+                  name: c.name,
+                  implementation: c.implementationName,
+                  protocol: c.protocol,
+                  enabled: c.enable,
+                  priority: c.priority,
+                  removeCompletedDownloads: c.removeCompletedDownloads,
+                  removeFailedDownloads: c.removeFailedDownloads,
+                  tags: c.tags,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        // Naming config
+        case "sonarr_get_naming":
+        case "radarr_get_naming":
+        case "lidarr_get_naming":
+        case "readarr_get_naming": {
+          const serviceName = name.split('_')[0] as keyof typeof clients;
+          const client = clients[serviceName];
+          if (!client) throw new Error(`${serviceName} not configured`);
+          const naming = await client.getNamingConfig();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify(naming, null, 2),
+            }],
+          };
+        }
+
+        // Tags
+        case "sonarr_get_tags":
+        case "radarr_get_tags":
+        case "lidarr_get_tags":
+        case "readarr_get_tags": {
+          const serviceName = name.split('_')[0] as keyof typeof clients;
+          const client = clients[serviceName];
+          if (!client) throw new Error(`${serviceName} not configured`);
+          const tags = await client.getTags();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: tags.length,
+                tags: tags.map(t => ({ id: t.id, label: t.label })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        // Comprehensive setup review
+        case "sonarr_review_setup":
+        case "radarr_review_setup":
+        case "lidarr_review_setup":
+        case "readarr_review_setup": {
+          const serviceName = name.split('_')[0] as keyof typeof clients;
+          const client = clients[serviceName];
+          if (!client) throw new Error(`${serviceName} not configured`);
+
+          // Gather all configuration data
+          const [status, health, qualityProfiles, qualityDefinitions, downloadClients, naming, mediaManagement, rootFolders, tags, indexers] = await Promise.all([
+            client.getStatus(),
+            client.getHealth(),
+            client.getQualityProfiles(),
+            client.getQualityDefinitions(),
+            client.getDownloadClients(),
+            client.getNamingConfig(),
+            client.getMediaManagement(),
+            client.getRootFoldersDetailed(),
+            client.getTags(),
+            client.getIndexers(),
+          ]);
+
+          // For Lidarr/Readarr, also get metadata profiles
+          let metadataProfiles = null;
+          if (serviceName === 'lidarr' && clients.lidarr) {
+            metadataProfiles = await clients.lidarr.getMetadataProfiles();
+          } else if (serviceName === 'readarr' && clients.readarr) {
+            metadataProfiles = await clients.readarr.getMetadataProfiles();
+          }
+
+          const review = {
+            service: serviceName,
+            version: status.version,
+            appName: status.appName,
+            platform: {
+              os: status.osName,
+              isDocker: status.isDocker,
+            },
+            health: {
               issueCount: health.length,
-              issues: health.map(h => ({
-                source: h.source,
-                type: h.type,
-                message: h.message,
-                wikiUrl: h.wikiUrl,
-              })),
-              status: health.length === 0 ? 'healthy' : 'issues detected',
-            }, null, 2),
-          }],
-        };
-      }
-
-      // Root folders
-      case "sonarr_get_root_folders":
-      case "radarr_get_root_folders":
-      case "lidarr_get_root_folders":
-      case "readarr_get_root_folders": {
-        const serviceName = name.split('_')[0] as keyof typeof clients;
-        const client = clients[serviceName];
-        if (!client) throw new Error(`${serviceName} not configured`);
-        const folders = await client.getRootFoldersDetailed();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: folders.length,
-              folders: folders.map(f => ({
-                id: f.id,
+              issues: health,
+            },
+            storage: {
+              rootFolders: rootFolders.map(f => ({
                 path: f.path,
                 accessible: f.accessible,
                 freeSpace: formatBytes(f.freeSpace),
                 freeSpaceBytes: f.freeSpace,
-                unmappedFolders: f.unmappedFolders?.length || 0,
+                unmappedFolderCount: f.unmappedFolders?.length || 0,
               })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      // Download clients
-      case "sonarr_get_download_clients":
-      case "radarr_get_download_clients":
-      case "lidarr_get_download_clients":
-      case "readarr_get_download_clients": {
-        const serviceName = name.split('_')[0] as keyof typeof clients;
-        const client = clients[serviceName];
-        if (!client) throw new Error(`${serviceName} not configured`);
-        const downloadClients = await client.getDownloadClients();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: downloadClients.length,
-              clients: downloadClients.map(c => ({
-                id: c.id,
-                name: c.name,
-                implementation: c.implementationName,
-                protocol: c.protocol,
-                enabled: c.enable,
-                priority: c.priority,
-                removeCompletedDownloads: c.removeCompletedDownloads,
-                removeFailedDownloads: c.removeFailedDownloads,
-                tags: c.tags,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      // Naming config
-      case "sonarr_get_naming":
-      case "radarr_get_naming":
-      case "lidarr_get_naming":
-      case "readarr_get_naming": {
-        const serviceName = name.split('_')[0] as keyof typeof clients;
-        const client = clients[serviceName];
-        if (!client) throw new Error(`${serviceName} not configured`);
-        const naming = await client.getNamingConfig();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(naming, null, 2),
-          }],
-        };
-      }
-
-      // Tags
-      case "sonarr_get_tags":
-      case "radarr_get_tags":
-      case "lidarr_get_tags":
-      case "readarr_get_tags": {
-        const serviceName = name.split('_')[0] as keyof typeof clients;
-        const client = clients[serviceName];
-        if (!client) throw new Error(`${serviceName} not configured`);
-        const tags = await client.getTags();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: tags.length,
-              tags: tags.map(t => ({ id: t.id, label: t.label })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      // Comprehensive setup review
-      case "sonarr_review_setup":
-      case "radarr_review_setup":
-      case "lidarr_review_setup":
-      case "readarr_review_setup": {
-        const serviceName = name.split('_')[0] as keyof typeof clients;
-        const client = clients[serviceName];
-        if (!client) throw new Error(`${serviceName} not configured`);
-
-        // Gather all configuration data
-        const [status, health, qualityProfiles, qualityDefinitions, downloadClients, naming, mediaManagement, rootFolders, tags, indexers] = await Promise.all([
-          client.getStatus(),
-          client.getHealth(),
-          client.getQualityProfiles(),
-          client.getQualityDefinitions(),
-          client.getDownloadClients(),
-          client.getNamingConfig(),
-          client.getMediaManagement(),
-          client.getRootFoldersDetailed(),
-          client.getTags(),
-          client.getIndexers(),
-        ]);
-
-        // For Lidarr/Readarr, also get metadata profiles
-        let metadataProfiles = null;
-        if (serviceName === 'lidarr' && clients.lidarr) {
-          metadataProfiles = await clients.lidarr.getMetadataProfiles();
-        } else if (serviceName === 'readarr' && clients.readarr) {
-          metadataProfiles = await clients.readarr.getMetadataProfiles();
-        }
-
-        const review = {
-          service: serviceName,
-          version: status.version,
-          appName: status.appName,
-          platform: {
-            os: status.osName,
-            isDocker: status.isDocker,
-          },
-          health: {
-            issueCount: health.length,
-            issues: health,
-          },
-          storage: {
-            rootFolders: rootFolders.map(f => ({
-              path: f.path,
-              accessible: f.accessible,
-              freeSpace: formatBytes(f.freeSpace),
-              freeSpaceBytes: f.freeSpace,
-              unmappedFolderCount: f.unmappedFolders?.length || 0,
+            },
+            qualityProfiles: qualityProfiles.map(p => ({
+              id: p.id,
+              name: p.name,
+              upgradeAllowed: p.upgradeAllowed,
+              cutoff: p.cutoff,
+              allowedQualities: p.items
+                .filter(i => i.allowed)
+                .map(i => i.quality?.name || i.name || (i.items?.map(q => q.quality.name).join(', ')))
+                .filter(Boolean),
+              customFormatsWithScores: p.formatItems?.filter(f => f.score !== 0).length || 0,
+              minFormatScore: p.minFormatScore,
             })),
-          },
-          qualityProfiles: qualityProfiles.map(p => ({
-            id: p.id,
-            name: p.name,
-            upgradeAllowed: p.upgradeAllowed,
-            cutoff: p.cutoff,
-            allowedQualities: p.items
-              .filter(i => i.allowed)
-              .map(i => i.quality?.name || i.name || (i.items?.map(q => q.quality.name).join(', ')))
-              .filter(Boolean),
-            customFormatsWithScores: p.formatItems?.filter(f => f.score !== 0).length || 0,
-            minFormatScore: p.minFormatScore,
-          })),
-          qualityDefinitions: qualityDefinitions.map(d => ({
-            quality: d.quality.name,
-            minSize: d.minSize + ' MB/min',
-            maxSize: d.maxSize === 0 ? 'unlimited' : d.maxSize + ' MB/min',
-            preferredSize: d.preferredSize + ' MB/min',
-          })),
-          downloadClients: downloadClients.map(c => ({
-            name: c.name,
-            type: c.implementationName,
-            protocol: c.protocol,
-            enabled: c.enable,
-            priority: c.priority,
-          })),
-          indexers: indexers.map(i => ({
-            name: i.name,
-            protocol: i.protocol,
-            enableRss: i.enableRss,
-            enableAutomaticSearch: i.enableAutomaticSearch,
-            enableInteractiveSearch: i.enableInteractiveSearch,
-            priority: i.priority,
-          })),
-          naming: naming,
-          mediaManagement: {
-            recycleBin: mediaManagement.recycleBin || 'not set',
-            recycleBinCleanupDays: mediaManagement.recycleBinCleanupDays,
-            downloadPropersAndRepacks: mediaManagement.downloadPropersAndRepacks,
-            deleteEmptyFolders: mediaManagement.deleteEmptyFolders,
-            copyUsingHardlinks: mediaManagement.copyUsingHardlinks,
-            importExtraFiles: mediaManagement.importExtraFiles,
-            extraFileExtensions: mediaManagement.extraFileExtensions,
-          },
-          tags: tags.map(t => t.label),
-          ...(metadataProfiles && { metadataProfiles }),
-        };
+            qualityDefinitions: qualityDefinitions.map(d => ({
+              quality: d.quality.name,
+              minSize: d.minSize + ' MB/min',
+              maxSize: d.maxSize === 0 ? 'unlimited' : d.maxSize + ' MB/min',
+              preferredSize: d.preferredSize + ' MB/min',
+            })),
+            downloadClients: downloadClients.map(c => ({
+              name: c.name,
+              type: c.implementationName,
+              protocol: c.protocol,
+              enabled: c.enable,
+              priority: c.priority,
+            })),
+            indexers: indexers.map(i => ({
+              name: i.name,
+              protocol: i.protocol,
+              enableRss: i.enableRss,
+              enableAutomaticSearch: i.enableAutomaticSearch,
+              enableInteractiveSearch: i.enableInteractiveSearch,
+              priority: i.priority,
+            })),
+            naming: naming,
+            mediaManagement: {
+              recycleBin: mediaManagement.recycleBin || 'not set',
+              recycleBinCleanupDays: mediaManagement.recycleBinCleanupDays,
+              downloadPropersAndRepacks: mediaManagement.downloadPropersAndRepacks,
+              deleteEmptyFolders: mediaManagement.deleteEmptyFolders,
+              copyUsingHardlinks: mediaManagement.copyUsingHardlinks,
+              importExtraFiles: mediaManagement.importExtraFiles,
+              extraFileExtensions: mediaManagement.extraFileExtensions,
+            },
+            tags: tags.map(t => t.label),
+            ...(metadataProfiles && { metadataProfiles }),
+          };
 
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(review, null, 2),
-          }],
-        };
-      }
-
-      // Sonarr handlers
-      case "sonarr_get_series": {
-        if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const series = await clients.sonarr.getSeries();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: series.length,
-              series: series.map(s => ({
-                id: s.id,
-                title: s.title,
-                year: s.year,
-                status: s.status,
-                network: s.network,
-                seasons: s.statistics?.seasonCount,
-                episodes: s.statistics?.episodeFileCount + '/' + s.statistics?.totalEpisodeCount,
-                sizeOnDisk: formatBytes(s.statistics?.sizeOnDisk || 0),
-                monitored: s.monitored,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "sonarr_search": {
-        if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const term = (args as { term: string }).term;
-        const results = await clients.sonarr.searchSeries(term);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: results.length,
-              results: results.slice(0, 10).map(r => ({
-                title: r.title,
-                year: r.year,
-                tvdbId: r.tvdbId,
-                overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "sonarr_get_queue": {
-        if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const queue = await clients.sonarr.getQueue();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              totalRecords: queue.totalRecords,
-              items: queue.records.map(q => ({
-                title: q.title,
-                status: q.status,
-                progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
-                timeLeft: q.timeleft,
-                downloadClient: q.downloadClient,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "sonarr_get_calendar": {
-        if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const days = (args as { days?: number })?.days || 7;
-        const start = new Date().toISOString().split('T')[0];
-        const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        const calendar = await clients.sonarr.getCalendar(start, end);
-        return {
-          content: [{ type: "text", text: JSON.stringify(calendar, null, 2) }],
-        };
-      }
-
-      case "sonarr_get_episodes": {
-        if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const { seriesId, seasonNumber } = args as { seriesId: number; seasonNumber?: number };
-        const episodes = await clients.sonarr.getEpisodes(seriesId, seasonNumber);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: episodes.length,
-              episodes: episodes.map(e => ({
-                id: e.id,
-                seasonNumber: e.seasonNumber,
-                episodeNumber: e.episodeNumber,
-                title: e.title,
-                airDate: e.airDate,
-                hasFile: e.hasFile,
-                monitored: e.monitored,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "sonarr_search_missing": {
-        if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const seriesId = (args as { seriesId: number }).seriesId;
-        const result = await clients.sonarr.searchMissing(seriesId);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: `Search triggered for missing episodes`,
-              commandId: result.id,
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "sonarr_search_episode": {
-        if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const episodeIds = (args as { episodeIds: number[] }).episodeIds;
-        const result = await clients.sonarr.searchEpisode(episodeIds);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: `Search triggered for ${episodeIds.length} episode(s)`,
-              commandId: result.id,
-            }, null, 2),
-          }],
-        };
-      }
-
-      // Radarr handlers
-      case "radarr_get_movies": {
-        if (!clients.radarr) throw new Error("Radarr not configured");
-        const movies = await clients.radarr.getMovies();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: movies.length,
-              movies: movies.map(m => ({
-                id: m.id,
-                title: m.title,
-                year: m.year,
-                status: m.status,
-                hasFile: m.hasFile,
-                sizeOnDisk: formatBytes(m.sizeOnDisk),
-                monitored: m.monitored,
-                studio: m.studio,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "radarr_search": {
-        if (!clients.radarr) throw new Error("Radarr not configured");
-        const term = (args as { term: string }).term;
-        const results = await clients.radarr.searchMovies(term);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: results.length,
-              results: results.slice(0, 10).map(r => ({
-                title: r.title,
-                year: r.year,
-                tmdbId: r.tmdbId,
-                imdbId: r.imdbId,
-                overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "radarr_get_queue": {
-        if (!clients.radarr) throw new Error("Radarr not configured");
-        const queue = await clients.radarr.getQueue();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              totalRecords: queue.totalRecords,
-              items: queue.records.map(q => ({
-                title: q.title,
-                status: q.status,
-                progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
-                timeLeft: q.timeleft,
-                downloadClient: q.downloadClient,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "radarr_get_calendar": {
-        if (!clients.radarr) throw new Error("Radarr not configured");
-        const days = (args as { days?: number })?.days || 30;
-        const start = new Date().toISOString().split('T')[0];
-        const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        const calendar = await clients.radarr.getCalendar(start, end);
-        return {
-          content: [{ type: "text", text: JSON.stringify(calendar, null, 2) }],
-        };
-      }
-
-      case "radarr_search_movie": {
-        if (!clients.radarr) throw new Error("Radarr not configured");
-        const movieId = (args as { movieId: number }).movieId;
-        const result = await clients.radarr.searchMovie(movieId);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: `Search triggered for movie`,
-              commandId: result.id,
-            }, null, 2),
-          }],
-        };
-      }
-
-      // Lidarr handlers
-      case "lidarr_get_artists": {
-        if (!clients.lidarr) throw new Error("Lidarr not configured");
-        const artists = await clients.lidarr.getArtists();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: artists.length,
-              artists: artists.map(a => ({
-                id: a.id,
-                artistName: a.artistName,
-                status: a.status,
-                albums: a.statistics?.albumCount,
-                tracks: a.statistics?.trackFileCount + '/' + a.statistics?.totalTrackCount,
-                sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
-                monitored: a.monitored,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "lidarr_search": {
-        if (!clients.lidarr) throw new Error("Lidarr not configured");
-        const term = (args as { term: string }).term;
-        const results = await clients.lidarr.searchArtists(term);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: results.length,
-              results: results.slice(0, 10).map(r => ({
-                title: r.title,
-                foreignArtistId: r.foreignArtistId,
-                overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "lidarr_get_queue": {
-        if (!clients.lidarr) throw new Error("Lidarr not configured");
-        const queue = await clients.lidarr.getQueue();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              totalRecords: queue.totalRecords,
-              items: queue.records.map(q => ({
-                title: q.title,
-                status: q.status,
-                progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
-                timeLeft: q.timeleft,
-                downloadClient: q.downloadClient,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "lidarr_get_albums": {
-        if (!clients.lidarr) throw new Error("Lidarr not configured");
-        const artistId = (args as { artistId: number }).artistId;
-        const albums = await clients.lidarr.getAlbums(artistId);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: albums.length,
-              albums: albums.map(a => ({
-                id: a.id,
-                title: a.title,
-                releaseDate: a.releaseDate,
-                albumType: a.albumType,
-                monitored: a.monitored,
-                tracks: a.statistics ? `${a.statistics.trackFileCount}/${a.statistics.totalTrackCount}` : 'unknown',
-                sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
-                percentComplete: a.statistics?.percentOfTracks || 0,
-                grabbed: a.grabbed,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "lidarr_search_album": {
-        if (!clients.lidarr) throw new Error("Lidarr not configured");
-        const albumId = (args as { albumId: number }).albumId;
-        const result = await clients.lidarr.searchAlbum(albumId);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: `Search triggered for album`,
-              commandId: result.id,
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "lidarr_search_missing": {
-        if (!clients.lidarr) throw new Error("Lidarr not configured");
-        const artistId = (args as { artistId: number }).artistId;
-        const result = await clients.lidarr.searchMissingAlbums(artistId);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: `Search triggered for missing albums`,
-              commandId: result.id,
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "lidarr_get_calendar": {
-        if (!clients.lidarr) throw new Error("Lidarr not configured");
-        const days = (args as { days?: number })?.days || 30;
-        const start = new Date().toISOString().split('T')[0];
-        const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        const calendar = await clients.lidarr.getCalendar(start, end);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: calendar.length,
-              albums: calendar.map(a => ({
-                id: a.id,
-                title: a.title,
-                artistId: a.artistId,
-                releaseDate: a.releaseDate,
-                albumType: a.albumType,
-                monitored: a.monitored,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      // Readarr handlers
-      case "readarr_get_authors": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const authors = await clients.readarr.getAuthors();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: authors.length,
-              authors: authors.map(a => ({
-                id: a.id,
-                authorName: a.authorName,
-                status: a.status,
-                books: a.statistics?.bookFileCount + '/' + a.statistics?.totalBookCount,
-                sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
-                monitored: a.monitored,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "readarr_search": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const term = (args as { term: string }).term;
-        const results = await clients.readarr.searchAuthors(term);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: results.length,
-              results: results.slice(0, 10).map(r => ({
-                title: r.title,
-                foreignAuthorId: r.foreignAuthorId,
-                overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "readarr_get_queue": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const queue = await clients.readarr.getQueue();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              totalRecords: queue.totalRecords,
-              items: queue.records.map(q => ({
-                title: q.title,
-                status: q.status,
-                progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
-                timeLeft: q.timeleft,
-                downloadClient: q.downloadClient,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "readarr_get_books": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const authorId = (args as { authorId: number }).authorId;
-        const books = await clients.readarr.getBooks(authorId);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: books.length,
-              books: books.map(b => ({
-                id: b.id,
-                title: b.title,
-                releaseDate: b.releaseDate,
-                pageCount: b.pageCount,
-                monitored: b.monitored,
-                hasFile: b.statistics ? b.statistics.bookFileCount > 0 : false,
-                sizeOnDisk: formatBytes(b.statistics?.sizeOnDisk || 0),
-                grabbed: b.grabbed,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "readarr_search_book": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const bookIds = (args as { bookIds: number[] }).bookIds;
-        const result = await clients.readarr.searchBook(bookIds);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: `Search triggered for ${bookIds.length} book(s)`,
-              commandId: result.id,
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "readarr_search_missing": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const authorId = (args as { authorId: number }).authorId;
-        const result = await clients.readarr.searchMissingBooks(authorId);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: `Search triggered for missing books`,
-              commandId: result.id,
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "readarr_get_calendar": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const days = (args as { days?: number })?.days || 30;
-        const start = new Date().toISOString().split('T')[0];
-        const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        const calendar = await clients.readarr.getCalendar(start, end);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: calendar.length,
-              books: calendar.map(b => ({
-                id: b.id,
-                title: b.title,
-                authorId: b.authorId,
-                releaseDate: b.releaseDate,
-                monitored: b.monitored,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      // Prowlarr handlers
-      case "prowlarr_get_indexers": {
-        if (!clients.prowlarr) throw new Error("Prowlarr not configured");
-        const indexers = await clients.prowlarr.getIndexers();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: indexers.length,
-              indexers: indexers.map(i => ({
-                id: i.id,
-                name: i.name,
-                protocol: i.protocol,
-                enableRss: i.enableRss,
-                enableAutomaticSearch: i.enableAutomaticSearch,
-                enableInteractiveSearch: i.enableInteractiveSearch,
-                priority: i.priority,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "prowlarr_search": {
-        if (!clients.prowlarr) throw new Error("Prowlarr not configured");
-        const query = (args as { query: string }).query;
-        const results = await clients.prowlarr.search(query);
-        return {
-          content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
-        };
-      }
-
-      case "prowlarr_test_indexers": {
-        if (!clients.prowlarr) throw new Error("Prowlarr not configured");
-        const results = await clients.prowlarr.testAllIndexers();
-        const indexers = await clients.prowlarr.getIndexers();
-        const indexerMap = new Map(indexers.map(i => [i.id, i.name]));
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: results.length,
-              indexers: results.map(r => ({
-                id: r.id,
-                name: indexerMap.get(r.id) || 'Unknown',
-                isValid: r.isValid,
-                errors: r.validationFailures.map(f => f.errorMessage),
-              })),
-              healthy: results.filter(r => r.isValid).length,
-              failed: results.filter(r => !r.isValid).length,
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "prowlarr_get_stats": {
-        if (!clients.prowlarr) throw new Error("Prowlarr not configured");
-        const stats = await clients.prowlarr.getIndexerStats();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: stats.indexers.length,
-              indexers: stats.indexers.map(s => ({
-                name: s.indexerName,
-                queries: s.numberOfQueries,
-                grabs: s.numberOfGrabs,
-                failedQueries: s.numberOfFailedQueries,
-                failedGrabs: s.numberOfFailedGrabs,
-                avgResponseTime: s.averageResponseTime + 'ms',
-              })),
-              totals: {
-                queries: stats.indexers.reduce((sum, s) => sum + s.numberOfQueries, 0),
-                grabs: stats.indexers.reduce((sum, s) => sum + s.numberOfGrabs, 0),
-                failedQueries: stats.indexers.reduce((sum, s) => sum + s.numberOfFailedQueries, 0),
-                failedGrabs: stats.indexers.reduce((sum, s) => sum + s.numberOfFailedGrabs, 0),
-              },
-            }, null, 2),
-          }],
-        };
-      }
-
-      // Cross-service search
-      case "arr_search_all": {
-        const term = (args as { term: string }).term;
-        const results: Record<string, unknown> = {};
-
-        if (clients.sonarr) {
-          try {
-            const sonarrResults = await clients.sonarr.searchSeries(term);
-            results.sonarr = { count: sonarrResults.length, results: sonarrResults.slice(0, 5) };
-          } catch (e) {
-            results.sonarr = { error: e instanceof Error ? e.message : String(e) };
-          }
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify(review, null, 2),
+            }],
+          };
         }
 
-        if (clients.radarr) {
-          try {
-            const radarrResults = await clients.radarr.searchMovies(term);
-            results.radarr = { count: radarrResults.length, results: radarrResults.slice(0, 5) };
-          } catch (e) {
-            results.radarr = { error: e instanceof Error ? e.message : String(e) };
-          }
-        }
-
-        if (clients.lidarr) {
-          try {
-            const lidarrResults = await clients.lidarr.searchArtists(term);
-            results.lidarr = { count: lidarrResults.length, results: lidarrResults.slice(0, 5) };
-          } catch (e) {
-            results.lidarr = { error: e instanceof Error ? e.message : String(e) };
-          }
-        }
-
-        if (clients.readarr) {
-          try {
-            const readarrResults = await clients.readarr.searchAuthors(term);
-            results.readarr = { count: readarrResults.length, results: readarrResults.slice(0, 5) };
-          } catch (e) {
-            results.readarr = { error: e instanceof Error ? e.message : String(e) };
-          }
-        }
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
-        };
-      }
-
-      // TRaSH Guides handlers
-      case "trash_list_profiles": {
-        const service = (args as { service: TrashService }).service;
-        const profiles = await trashClient.listProfiles(service);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              service,
-              count: profiles.length,
-              profiles: profiles.map(p => ({
-                name: p.name,
-                description: p.description?.replace(/<br>/g, ' ') || 'No description',
-              })),
-              usage: "Use trash_get_profile to see full details for a specific profile",
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "trash_get_profile": {
-        const { service, profile: profileName } = args as { service: TrashService; profile: string };
-        const profile = await trashClient.getProfile(service, profileName);
-        if (!profile) {
+        // Sonarr handlers
+        case "sonarr_get_series": {
+          if (!clients.sonarr) throw new Error("Sonarr not configured");
+          const series = await clients.sonarr.getSeries();
           return {
             content: [{
               type: "text",
               text: JSON.stringify({
-                error: `Profile '${profileName}' not found for ${service}`,
-                hint: "Use trash_list_profiles to see available profiles",
-              }, null, 2),
-            }],
-            isError: true,
-          };
-        }
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              name: profile.name,
-              description: profile.trash_description?.replace(/<br>/g, '\n'),
-              trash_id: profile.trash_id,
-              upgradeAllowed: profile.upgradeAllowed,
-              cutoff: profile.cutoff,
-              minFormatScore: profile.minFormatScore,
-              cutoffFormatScore: profile.cutoffFormatScore,
-              language: profile.language,
-              qualities: profile.items.map(i => ({
-                name: i.name,
-                allowed: i.allowed,
-                items: i.items,
-              })),
-              customFormats: Object.entries(profile.formatItems || {}).map(([name, trashId]) => ({
-                name,
-                trash_id: trashId,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "trash_list_custom_formats": {
-        const { service, category } = args as { service: TrashService; category?: string };
-        const formats = await trashClient.listCustomFormats(service, category);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              service,
-              category: category || 'all',
-              count: formats.length,
-              formats: formats.slice(0, 50).map(f => ({
-                name: f.name,
-                categories: f.categories,
-                defaultScore: f.defaultScore,
-              })),
-              note: formats.length > 50 ? `Showing first 50 of ${formats.length}. Use category filter to narrow results.` : undefined,
-              availableCategories: ['hdr', 'audio', 'resolution', 'source', 'streaming', 'anime', 'unwanted', 'release', 'language'],
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "trash_get_naming": {
-        const { service, mediaServer } = args as { service: TrashService; mediaServer: string };
-        const naming = await trashClient.getNaming(service);
-        if (!naming) {
-          return {
-            content: [{
-              type: "text",
-              text: JSON.stringify({ error: `Could not fetch naming conventions for ${service}` }, null, 2),
-            }],
-            isError: true,
-          };
-        }
-
-        // Map media server to naming key
-        const serverMap: Record<string, { folder: string; file: string }> = {
-          plex: { folder: 'plex-imdb', file: 'plex-imdb' },
-          emby: { folder: 'emby-imdb', file: 'emby-imdb' },
-          jellyfin: { folder: 'jellyfin-imdb', file: 'jellyfin-imdb' },
-          standard: { folder: 'default', file: 'standard' },
-        };
-
-        const keys = serverMap[mediaServer] || serverMap.standard;
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              service,
-              mediaServer,
-              recommended: {
-                folder: naming.folder[keys.folder] || naming.folder.default,
-                file: naming.file[keys.file] || naming.file.standard,
-                ...(naming.season && { season: naming.season[keys.folder] || naming.season.default }),
-                ...(naming.series && { series: naming.series[keys.folder] || naming.series.default }),
-              },
-              allFolderOptions: Object.keys(naming.folder),
-              allFileOptions: Object.keys(naming.file),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "trash_get_quality_sizes": {
-        const { service, type } = args as { service: TrashService; type?: string };
-        const sizes = await trashClient.getQualitySizes(service, type);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              service,
-              type: type || 'all',
-              profiles: sizes.map(s => ({
-                type: s.type,
-                qualities: s.qualities.map(q => ({
-                  quality: q.quality,
-                  min: q.min + ' MB/min',
-                  preferred: q.preferred === 1999 ? 'unlimited' : q.preferred + ' MB/min',
-                  max: q.max === 2000 ? 'unlimited' : q.max + ' MB/min',
+                count: series.length,
+                series: series.map(s => ({
+                  id: s.id,
+                  title: s.title,
+                  year: s.year,
+                  status: s.status,
+                  network: s.network,
+                  seasons: s.statistics?.seasonCount,
+                  episodes: s.statistics?.episodeFileCount + '/' + s.statistics?.totalEpisodeCount,
+                  sizeOnDisk: formatBytes(s.statistics?.sizeOnDisk || 0),
+                  monitored: s.monitored,
                 })),
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "trash_compare_profile": {
-        const { service, profileId, trashProfile } = args as {
-          service: TrashService;
-          profileId: number;
-          trashProfile: string;
-        };
-
-        // Get client
-        const client = service === 'radarr' ? clients.radarr : clients.sonarr;
-        if (!client) {
-          return {
-            content: [{
-              type: "text",
-              text: JSON.stringify({ error: `${service} not configured. Cannot compare profiles.` }, null, 2),
+              }, null, 2),
             }],
-            isError: true,
           };
         }
 
-        // Fetch both profiles
-        const [userProfiles, trashProfileData] = await Promise.all([
-          client.getQualityProfiles(),
-          trashClient.getProfile(service, trashProfile),
-        ]);
-
-        const userProfile = userProfiles.find(p => p.id === profileId);
-        if (!userProfile) {
+        case "sonarr_search": {
+          if (!clients.sonarr) throw new Error("Sonarr not configured");
+          const term = (args as { term: string }).term;
+          const results = await clients.sonarr.searchSeries(term);
           return {
             content: [{
               type: "text",
               text: JSON.stringify({
-                error: `Profile ID ${profileId} not found`,
-                availableProfiles: userProfiles.map(p => ({ id: p.id, name: p.name })),
+                count: results.length,
+                results: results.slice(0, 10).map(r => ({
+                  title: r.title,
+                  year: r.year,
+                  tvdbId: r.tvdbId,
+                  overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
+                })),
               }, null, 2),
             }],
-            isError: true,
           };
         }
 
-        if (!trashProfileData) {
+        case "sonarr_get_queue": {
+          if (!clients.sonarr) throw new Error("Sonarr not configured");
+          const queue = await clients.sonarr.getQueue();
           return {
             content: [{
               type: "text",
               text: JSON.stringify({
-                error: `TRaSH profile '${trashProfile}' not found`,
-                hint: "Use trash_list_profiles to see available profiles",
+                totalRecords: queue.totalRecords,
+                items: queue.records.map(q => ({
+                  title: q.title,
+                  status: q.status,
+                  progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
+                  timeLeft: q.timeleft,
+                  downloadClient: q.downloadClient,
+                })),
               }, null, 2),
             }],
-            isError: true,
           };
         }
 
-        // Compare qualities
-        const userQualities = new Set<string>(
-          userProfile.items
-            .filter(i => i.allowed)
-            .map(i => i.quality?.name || i.name)
-            .filter((n): n is string => n !== undefined)
-        );
-        const trashQualities = new Set<string>(
-          trashProfileData.items
-            .filter(i => i.allowed)
-            .map(i => i.name)
-        );
+        case "sonarr_get_calendar": {
+          if (!clients.sonarr) throw new Error("Sonarr not configured");
+          const days = (args as { days?: number })?.days || 7;
+          const start = new Date().toISOString().split('T')[0];
+          const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const calendar = await clients.sonarr.getCalendar(start, end);
+          return {
+            content: [{ type: "text", text: JSON.stringify(calendar, null, 2) }],
+          };
+        }
 
-        const qualityComparison = {
-          matching: [...userQualities].filter(q => trashQualities.has(q)),
-          missingFromYours: [...trashQualities].filter(q => !userQualities.has(q)),
-          extraInYours: [...userQualities].filter(q => !trashQualities.has(q)),
-        };
-
-        // Compare custom formats
-        const userCFNames = new Set(
-          (userProfile.formatItems || [])
-            .filter(f => f.score !== 0)
-            .map(f => f.name)
-        );
-        const trashCFNames = new Set(Object.keys(trashProfileData.formatItems || {}));
-
-        const cfComparison = {
-          matching: [...userCFNames].filter(cf => trashCFNames.has(cf)),
-          missingFromYours: [...trashCFNames].filter(cf => !userCFNames.has(cf)),
-          extraInYours: [...userCFNames].filter(cf => !trashCFNames.has(cf)),
-        };
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              yourProfile: {
-                name: userProfile.name,
-                id: userProfile.id,
-                upgradeAllowed: userProfile.upgradeAllowed,
-                cutoff: userProfile.cutoff,
-              },
-              trashProfile: {
-                name: trashProfileData.name,
-                upgradeAllowed: trashProfileData.upgradeAllowed,
-                cutoff: trashProfileData.cutoff,
-              },
-              qualityComparison,
-              customFormatComparison: cfComparison,
-              recommendations: [
-                ...(qualityComparison.missingFromYours.length > 0
-                  ? [`Enable these qualities: ${qualityComparison.missingFromYours.join(', ')}`]
-                  : []),
-                ...(cfComparison.missingFromYours.length > 0
-                  ? [`Add these custom formats: ${cfComparison.missingFromYours.slice(0, 5).join(', ')}${cfComparison.missingFromYours.length > 5 ? ` and ${cfComparison.missingFromYours.length - 5} more` : ''}`]
-                  : []),
-                ...(userProfile.upgradeAllowed !== trashProfileData.upgradeAllowed
-                  ? [`Set upgradeAllowed to ${trashProfileData.upgradeAllowed}`]
-                  : []),
-              ],
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "trash_compare_naming": {
-        const { service, mediaServer } = args as { service: TrashService; mediaServer: string };
-
-        // Get client
-        const client = service === 'radarr' ? clients.radarr : clients.sonarr;
-        if (!client) {
+        case "sonarr_get_episodes": {
+          if (!clients.sonarr) throw new Error("Sonarr not configured");
+          const { seriesId, seasonNumber } = args as { seriesId: number; seasonNumber?: number };
+          const episodes = await clients.sonarr.getEpisodes(seriesId, seasonNumber);
           return {
             content: [{
               type: "text",
-              text: JSON.stringify({ error: `${service} not configured. Cannot compare naming.` }, null, 2),
+              text: JSON.stringify({
+                count: episodes.length,
+                episodes: episodes.map(e => ({
+                  id: e.id,
+                  seasonNumber: e.seasonNumber,
+                  episodeNumber: e.episodeNumber,
+                  title: e.title,
+                  airDate: e.airDate,
+                  hasFile: e.hasFile,
+                  monitored: e.monitored,
+                })),
+              }, null, 2),
             }],
-            isError: true,
           };
         }
 
-        // Fetch both
-        const [userNaming, trashNaming] = await Promise.all([
-          client.getNamingConfig(),
-          trashClient.getNaming(service),
-        ]);
-
-        if (!trashNaming) {
+        case "sonarr_search_missing": {
+          if (!clients.sonarr) throw new Error("Sonarr not configured");
+          const seriesId = (args as { seriesId: number }).seriesId;
+          const result = await clients.sonarr.searchMissing(seriesId);
           return {
             content: [{
               type: "text",
-              text: JSON.stringify({ error: `Could not fetch TRaSH naming for ${service}` }, null, 2),
+              text: JSON.stringify({
+                success: true,
+                message: `Search triggered for missing episodes`,
+                commandId: result.id,
+              }, null, 2),
             }],
-            isError: true,
           };
         }
 
-        // Map media server to naming key
-        const serverMap: Record<string, { folder: string; file: string }> = {
-          plex: { folder: 'plex-imdb', file: 'plex-imdb' },
-          emby: { folder: 'emby-imdb', file: 'emby-imdb' },
-          jellyfin: { folder: 'jellyfin-imdb', file: 'jellyfin-imdb' },
-          standard: { folder: 'default', file: 'standard' },
-        };
+        case "sonarr_search_episode": {
+          if (!clients.sonarr) throw new Error("Sonarr not configured");
+          const episodeIds = (args as { episodeIds: number[] }).episodeIds;
+          const result = await clients.sonarr.searchEpisode(episodeIds);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Search triggered for ${episodeIds.length} episode(s)`,
+                commandId: result.id,
+              }, null, 2),
+            }],
+          };
+        }
 
-        const keys = serverMap[mediaServer] || serverMap.standard;
-        const recommendedFolder = trashNaming.folder[keys.folder] || trashNaming.folder.default;
-        const recommendedFile = trashNaming.file[keys.file] || trashNaming.file.standard;
+        // Radarr handlers
+        case "radarr_get_movies": {
+          if (!clients.radarr) throw new Error("Radarr not configured");
+          const movies = await clients.radarr.getMovies();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: movies.length,
+                movies: movies.map(m => ({
+                  id: m.id,
+                  title: m.title,
+                  year: m.year,
+                  status: m.status,
+                  hasFile: m.hasFile,
+                  sizeOnDisk: formatBytes(m.sizeOnDisk),
+                  monitored: m.monitored,
+                  studio: m.studio,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
 
-        // Extract user's current naming (field names vary by service)
-        const namingRecord = userNaming as unknown as Record<string, unknown>;
-        const userFolder = namingRecord.movieFolderFormat ||
-          namingRecord.seriesFolderFormat ||
-          namingRecord.standardMovieFormat;
-        const userFile = namingRecord.standardMovieFormat ||
-          namingRecord.standardEpisodeFormat;
+        case "radarr_search": {
+          if (!clients.radarr) throw new Error("Radarr not configured");
+          const term = (args as { term: string }).term;
+          const results = await clients.radarr.searchMovies(term);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: results.length,
+                results: results.slice(0, 10).map(r => ({
+                  title: r.title,
+                  year: r.year,
+                  tmdbId: r.tmdbId,
+                  imdbId: r.imdbId,
+                  overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
+                })),
+              }, null, 2),
+            }],
+          };
+        }
 
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              mediaServer,
-              yourNaming: {
-                folder: userFolder,
-                file: userFile,
-              },
-              trashRecommended: {
-                folder: recommendedFolder,
-                file: recommendedFile,
-              },
-              folderMatch: userFolder === recommendedFolder,
-              fileMatch: userFile === recommendedFile,
-              recommendations: [
-                ...(userFolder !== recommendedFolder ? [`Update folder format to: ${recommendedFolder}`] : []),
-                ...(userFile !== recommendedFile ? [`Update file format to: ${recommendedFile}`] : []),
-              ],
-            }, null, 2),
-          }],
-        };
+        case "radarr_get_queue": {
+          if (!clients.radarr) throw new Error("Radarr not configured");
+          const queue = await clients.radarr.getQueue();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                totalRecords: queue.totalRecords,
+                items: queue.records.map(q => ({
+                  title: q.title,
+                  status: q.status,
+                  progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
+                  timeLeft: q.timeleft,
+                  downloadClient: q.downloadClient,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "radarr_get_calendar": {
+          if (!clients.radarr) throw new Error("Radarr not configured");
+          const days = (args as { days?: number })?.days || 30;
+          const start = new Date().toISOString().split('T')[0];
+          const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const calendar = await clients.radarr.getCalendar(start, end);
+          return {
+            content: [{ type: "text", text: JSON.stringify(calendar, null, 2) }],
+          };
+        }
+
+        case "radarr_search_movie": {
+          if (!clients.radarr) throw new Error("Radarr not configured");
+          const movieId = (args as { movieId: number }).movieId;
+          const result = await clients.radarr.searchMovie(movieId);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Search triggered for movie`,
+                commandId: result.id,
+              }, null, 2),
+            }],
+          };
+        }
+
+        // Lidarr handlers
+        case "lidarr_get_artists": {
+          if (!clients.lidarr) throw new Error("Lidarr not configured");
+          const artists = await clients.lidarr.getArtists();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: artists.length,
+                artists: artists.map(a => ({
+                  id: a.id,
+                  artistName: a.artistName,
+                  status: a.status,
+                  albums: a.statistics?.albumCount,
+                  tracks: a.statistics?.trackFileCount + '/' + a.statistics?.totalTrackCount,
+                  sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
+                  monitored: a.monitored,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "lidarr_search": {
+          if (!clients.lidarr) throw new Error("Lidarr not configured");
+          const term = (args as { term: string }).term;
+          const results = await clients.lidarr.searchArtists(term);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: results.length,
+                results: results.slice(0, 10).map(r => ({
+                  title: r.title,
+                  foreignArtistId: r.foreignArtistId,
+                  overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "lidarr_get_queue": {
+          if (!clients.lidarr) throw new Error("Lidarr not configured");
+          const queue = await clients.lidarr.getQueue();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                totalRecords: queue.totalRecords,
+                items: queue.records.map(q => ({
+                  title: q.title,
+                  status: q.status,
+                  progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
+                  timeLeft: q.timeleft,
+                  downloadClient: q.downloadClient,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "lidarr_get_albums": {
+          if (!clients.lidarr) throw new Error("Lidarr not configured");
+          const artistId = (args as { artistId: number }).artistId;
+          const albums = await clients.lidarr.getAlbums(artistId);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: albums.length,
+                albums: albums.map(a => ({
+                  id: a.id,
+                  title: a.title,
+                  releaseDate: a.releaseDate,
+                  albumType: a.albumType,
+                  monitored: a.monitored,
+                  tracks: a.statistics ? `${a.statistics.trackFileCount}/${a.statistics.totalTrackCount}` : 'unknown',
+                  sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
+                  percentComplete: a.statistics?.percentOfTracks || 0,
+                  grabbed: a.grabbed,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "lidarr_search_album": {
+          if (!clients.lidarr) throw new Error("Lidarr not configured");
+          const albumId = (args as { albumId: number }).albumId;
+          const result = await clients.lidarr.searchAlbum(albumId);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Search triggered for album`,
+                commandId: result.id,
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "lidarr_search_missing": {
+          if (!clients.lidarr) throw new Error("Lidarr not configured");
+          const artistId = (args as { artistId: number }).artistId;
+          const result = await clients.lidarr.searchMissingAlbums(artistId);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Search triggered for missing albums`,
+                commandId: result.id,
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "lidarr_get_calendar": {
+          if (!clients.lidarr) throw new Error("Lidarr not configured");
+          const days = (args as { days?: number })?.days || 30;
+          const start = new Date().toISOString().split('T')[0];
+          const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const calendar = await clients.lidarr.getCalendar(start, end);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: calendar.length,
+                albums: calendar.map(a => ({
+                  id: a.id,
+                  title: a.title,
+                  artistId: a.artistId,
+                  releaseDate: a.releaseDate,
+                  albumType: a.albumType,
+                  monitored: a.monitored,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        // Readarr handlers
+        case "readarr_get_authors": {
+          if (!clients.readarr) throw new Error("Readarr not configured");
+          const authors = await clients.readarr.getAuthors();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: authors.length,
+                authors: authors.map(a => ({
+                  id: a.id,
+                  authorName: a.authorName,
+                  status: a.status,
+                  books: a.statistics?.bookFileCount + '/' + a.statistics?.totalBookCount,
+                  sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
+                  monitored: a.monitored,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "readarr_search": {
+          if (!clients.readarr) throw new Error("Readarr not configured");
+          const term = (args as { term: string }).term;
+          const results = await clients.readarr.searchAuthors(term);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: results.length,
+                results: results.slice(0, 10).map(r => ({
+                  title: r.title,
+                  foreignAuthorId: r.foreignAuthorId,
+                  overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "readarr_get_queue": {
+          if (!clients.readarr) throw new Error("Readarr not configured");
+          const queue = await clients.readarr.getQueue();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                totalRecords: queue.totalRecords,
+                items: queue.records.map(q => ({
+                  title: q.title,
+                  status: q.status,
+                  progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
+                  timeLeft: q.timeleft,
+                  downloadClient: q.downloadClient,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "readarr_get_books": {
+          if (!clients.readarr) throw new Error("Readarr not configured");
+          const authorId = (args as { authorId: number }).authorId;
+          const books = await clients.readarr.getBooks(authorId);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: books.length,
+                books: books.map(b => ({
+                  id: b.id,
+                  title: b.title,
+                  releaseDate: b.releaseDate,
+                  pageCount: b.pageCount,
+                  monitored: b.monitored,
+                  hasFile: b.statistics ? b.statistics.bookFileCount > 0 : false,
+                  sizeOnDisk: formatBytes(b.statistics?.sizeOnDisk || 0),
+                  grabbed: b.grabbed,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "readarr_search_book": {
+          if (!clients.readarr) throw new Error("Readarr not configured");
+          const bookIds = (args as { bookIds: number[] }).bookIds;
+          const result = await clients.readarr.searchBook(bookIds);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Search triggered for ${bookIds.length} book(s)`,
+                commandId: result.id,
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "readarr_search_missing": {
+          if (!clients.readarr) throw new Error("Readarr not configured");
+          const authorId = (args as { authorId: number }).authorId;
+          const result = await clients.readarr.searchMissingBooks(authorId);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Search triggered for missing books`,
+                commandId: result.id,
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "readarr_get_calendar": {
+          if (!clients.readarr) throw new Error("Readarr not configured");
+          const days = (args as { days?: number })?.days || 30;
+          const start = new Date().toISOString().split('T')[0];
+          const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const calendar = await clients.readarr.getCalendar(start, end);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: calendar.length,
+                books: calendar.map(b => ({
+                  id: b.id,
+                  title: b.title,
+                  authorId: b.authorId,
+                  releaseDate: b.releaseDate,
+                  monitored: b.monitored,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        // Prowlarr handlers
+        case "prowlarr_get_indexers": {
+          if (!clients.prowlarr) throw new Error("Prowlarr not configured");
+          const indexers = await clients.prowlarr.getIndexers();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: indexers.length,
+                indexers: indexers.map(i => ({
+                  id: i.id,
+                  name: i.name,
+                  protocol: i.protocol,
+                  enableRss: i.enableRss,
+                  enableAutomaticSearch: i.enableAutomaticSearch,
+                  enableInteractiveSearch: i.enableInteractiveSearch,
+                  priority: i.priority,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "prowlarr_search": {
+          if (!clients.prowlarr) throw new Error("Prowlarr not configured");
+          const query = (args as { query: string }).query;
+          const results = await clients.prowlarr.search(query);
+          return {
+            content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+          };
+        }
+
+        case "prowlarr_test_indexers": {
+          if (!clients.prowlarr) throw new Error("Prowlarr not configured");
+          const results = await clients.prowlarr.testAllIndexers();
+          const indexers = await clients.prowlarr.getIndexers();
+          const indexerMap = new Map(indexers.map(i => [i.id, i.name]));
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: results.length,
+                indexers: results.map(r => ({
+                  id: r.id,
+                  name: indexerMap.get(r.id) || 'Unknown',
+                  isValid: r.isValid,
+                  errors: r.validationFailures.map(f => f.errorMessage),
+                })),
+                healthy: results.filter(r => r.isValid).length,
+                failed: results.filter(r => !r.isValid).length,
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "prowlarr_get_stats": {
+          if (!clients.prowlarr) throw new Error("Prowlarr not configured");
+          const stats = await clients.prowlarr.getIndexerStats();
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                count: stats.indexers.length,
+                indexers: stats.indexers.map(s => ({
+                  name: s.indexerName,
+                  queries: s.numberOfQueries,
+                  grabs: s.numberOfGrabs,
+                  failedQueries: s.numberOfFailedQueries,
+                  failedGrabs: s.numberOfFailedGrabs,
+                  avgResponseTime: s.averageResponseTime + 'ms',
+                })),
+                totals: {
+                  queries: stats.indexers.reduce((sum, s) => sum + s.numberOfQueries, 0),
+                  grabs: stats.indexers.reduce((sum, s) => sum + s.numberOfGrabs, 0),
+                  failedQueries: stats.indexers.reduce((sum, s) => sum + s.numberOfFailedQueries, 0),
+                  failedGrabs: stats.indexers.reduce((sum, s) => sum + s.numberOfFailedGrabs, 0),
+                },
+              }, null, 2),
+            }],
+          };
+        }
+
+        // Cross-service search
+        case "arr_search_all": {
+          const term = (args as { term: string }).term;
+          const results: Record<string, unknown> = {};
+
+          if (clients.sonarr) {
+            try {
+              const sonarrResults = await clients.sonarr.searchSeries(term);
+              results.sonarr = { count: sonarrResults.length, results: sonarrResults.slice(0, 5) };
+            } catch (e) {
+              results.sonarr = { error: e instanceof Error ? e.message : String(e) };
+            }
+          }
+
+          if (clients.radarr) {
+            try {
+              const radarrResults = await clients.radarr.searchMovies(term);
+              results.radarr = { count: radarrResults.length, results: radarrResults.slice(0, 5) };
+            } catch (e) {
+              results.radarr = { error: e instanceof Error ? e.message : String(e) };
+            }
+          }
+
+          if (clients.lidarr) {
+            try {
+              const lidarrResults = await clients.lidarr.searchArtists(term);
+              results.lidarr = { count: lidarrResults.length, results: lidarrResults.slice(0, 5) };
+            } catch (e) {
+              results.lidarr = { error: e instanceof Error ? e.message : String(e) };
+            }
+          }
+
+          if (clients.readarr) {
+            try {
+              const readarrResults = await clients.readarr.searchAuthors(term);
+              results.readarr = { count: readarrResults.length, results: readarrResults.slice(0, 5) };
+            } catch (e) {
+              results.readarr = { error: e instanceof Error ? e.message : String(e) };
+            }
+          }
+
+          return {
+            content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+          };
+        }
+
+        // TRaSH Guides handlers
+        case "trash_list_profiles": {
+          const service = (args as { service: TrashService }).service;
+          const profiles = await trashClient.listProfiles(service);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                service,
+                count: profiles.length,
+                profiles: profiles.map(p => ({
+                  name: p.name,
+                  description: p.description?.replace(/<br>/g, ' ') || 'No description',
+                })),
+                usage: "Use trash_get_profile to see full details for a specific profile",
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "trash_get_profile": {
+          const { service, profile: profileName } = args as { service: TrashService; profile: string };
+          const profile = await trashClient.getProfile(service, profileName);
+          if (!profile) {
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({
+                  error: `Profile '${profileName}' not found for ${service}`,
+                  hint: "Use trash_list_profiles to see available profiles",
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                name: profile.name,
+                description: profile.trash_description?.replace(/<br>/g, '\n'),
+                trash_id: profile.trash_id,
+                upgradeAllowed: profile.upgradeAllowed,
+                cutoff: profile.cutoff,
+                minFormatScore: profile.minFormatScore,
+                cutoffFormatScore: profile.cutoffFormatScore,
+                language: profile.language,
+                qualities: profile.items.map(i => ({
+                  name: i.name,
+                  allowed: i.allowed,
+                  items: i.items,
+                })),
+                customFormats: Object.entries(profile.formatItems || {}).map(([name, trashId]) => ({
+                  name,
+                  trash_id: trashId,
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "trash_list_custom_formats": {
+          const { service, category } = args as { service: TrashService; category?: string };
+          const formats = await trashClient.listCustomFormats(service, category);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                service,
+                category: category || 'all',
+                count: formats.length,
+                formats: formats.slice(0, 50).map(f => ({
+                  name: f.name,
+                  categories: f.categories,
+                  defaultScore: f.defaultScore,
+                })),
+                note: formats.length > 50 ? `Showing first 50 of ${formats.length}. Use category filter to narrow results.` : undefined,
+                availableCategories: ['hdr', 'audio', 'resolution', 'source', 'streaming', 'anime', 'unwanted', 'release', 'language'],
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "trash_get_naming": {
+          const { service, mediaServer } = args as { service: TrashService; mediaServer: string };
+          const naming = await trashClient.getNaming(service);
+          if (!naming) {
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ error: `Could not fetch naming conventions for ${service}` }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Map media server to naming key
+          const serverMap: Record<string, { folder: string; file: string }> = {
+            plex: { folder: 'plex-imdb', file: 'plex-imdb' },
+            emby: { folder: 'emby-imdb', file: 'emby-imdb' },
+            jellyfin: { folder: 'jellyfin-imdb', file: 'jellyfin-imdb' },
+            standard: { folder: 'default', file: 'standard' },
+          };
+
+          const keys = serverMap[mediaServer] || serverMap.standard;
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                service,
+                mediaServer,
+                recommended: {
+                  folder: naming.folder[keys.folder] || naming.folder.default,
+                  file: naming.file[keys.file] || naming.file.standard,
+                  ...(naming.season && { season: naming.season[keys.folder] || naming.season.default }),
+                  ...(naming.series && { series: naming.series[keys.folder] || naming.series.default }),
+                },
+                allFolderOptions: Object.keys(naming.folder),
+                allFileOptions: Object.keys(naming.file),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "trash_get_quality_sizes": {
+          const { service, type } = args as { service: TrashService; type?: string };
+          const sizes = await trashClient.getQualitySizes(service, type);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                service,
+                type: type || 'all',
+                profiles: sizes.map(s => ({
+                  type: s.type,
+                  qualities: s.qualities.map(q => ({
+                    quality: q.quality,
+                    min: q.min + ' MB/min',
+                    preferred: q.preferred === 1999 ? 'unlimited' : q.preferred + ' MB/min',
+                    max: q.max === 2000 ? 'unlimited' : q.max + ' MB/min',
+                  })),
+                })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "trash_compare_profile": {
+          const { service, profileId, trashProfile } = args as {
+            service: TrashService;
+            profileId: number;
+            trashProfile: string;
+          };
+
+          // Get client
+          const client = service === 'radarr' ? clients.radarr : clients.sonarr;
+          if (!client) {
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ error: `${service} not configured. Cannot compare profiles.` }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Fetch both profiles
+          const [userProfiles, trashProfileData] = await Promise.all([
+            client.getQualityProfiles(),
+            trashClient.getProfile(service, trashProfile),
+          ]);
+
+          const userProfile = userProfiles.find(p => p.id === profileId);
+          if (!userProfile) {
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({
+                  error: `Profile ID ${profileId} not found`,
+                  availableProfiles: userProfiles.map(p => ({ id: p.id, name: p.name })),
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          if (!trashProfileData) {
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({
+                  error: `TRaSH profile '${trashProfile}' not found`,
+                  hint: "Use trash_list_profiles to see available profiles",
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Compare qualities
+          const userQualities = new Set<string>(
+            userProfile.items
+              .filter(i => i.allowed)
+              .map(i => i.quality?.name || i.name)
+              .filter((n): n is string => n !== undefined)
+          );
+          const trashQualities = new Set<string>(
+            trashProfileData.items
+              .filter(i => i.allowed)
+              .map(i => i.name)
+          );
+
+          const qualityComparison = {
+            matching: [...userQualities].filter(q => trashQualities.has(q)),
+            missingFromYours: [...trashQualities].filter(q => !userQualities.has(q)),
+            extraInYours: [...userQualities].filter(q => !trashQualities.has(q)),
+          };
+
+          // Compare custom formats
+          const userCFNames = new Set(
+            (userProfile.formatItems || [])
+              .filter(f => f.score !== 0)
+              .map(f => f.name)
+          );
+          const trashCFNames = new Set(Object.keys(trashProfileData.formatItems || {}));
+
+          const cfComparison = {
+            matching: [...userCFNames].filter(cf => trashCFNames.has(cf)),
+            missingFromYours: [...trashCFNames].filter(cf => !userCFNames.has(cf)),
+            extraInYours: [...userCFNames].filter(cf => !trashCFNames.has(cf)),
+          };
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                yourProfile: {
+                  name: userProfile.name,
+                  id: userProfile.id,
+                  upgradeAllowed: userProfile.upgradeAllowed,
+                  cutoff: userProfile.cutoff,
+                },
+                trashProfile: {
+                  name: trashProfileData.name,
+                  upgradeAllowed: trashProfileData.upgradeAllowed,
+                  cutoff: trashProfileData.cutoff,
+                },
+                qualityComparison,
+                customFormatComparison: cfComparison,
+                recommendations: [
+                  ...(qualityComparison.missingFromYours.length > 0
+                    ? [`Enable these qualities: ${qualityComparison.missingFromYours.join(', ')}`]
+                    : []),
+                  ...(cfComparison.missingFromYours.length > 0
+                    ? [`Add these custom formats: ${cfComparison.missingFromYours.slice(0, 5).join(', ')}${cfComparison.missingFromYours.length > 5 ? ` and ${cfComparison.missingFromYours.length - 5} more` : ''}`]
+                    : []),
+                  ...(userProfile.upgradeAllowed !== trashProfileData.upgradeAllowed
+                    ? [`Set upgradeAllowed to ${trashProfileData.upgradeAllowed}`]
+                    : []),
+                ],
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "trash_compare_naming": {
+          const { service, mediaServer } = args as { service: TrashService; mediaServer: string };
+
+          // Get client
+          const client = service === 'radarr' ? clients.radarr : clients.sonarr;
+          if (!client) {
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ error: `${service} not configured. Cannot compare naming.` }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Fetch both
+          const [userNaming, trashNaming] = await Promise.all([
+            client.getNamingConfig(),
+            trashClient.getNaming(service),
+          ]);
+
+          if (!trashNaming) {
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ error: `Could not fetch TRaSH naming for ${service}` }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Map media server to naming key
+          const serverMap: Record<string, { folder: string; file: string }> = {
+            plex: { folder: 'plex-imdb', file: 'plex-imdb' },
+            emby: { folder: 'emby-imdb', file: 'emby-imdb' },
+            jellyfin: { folder: 'jellyfin-imdb', file: 'jellyfin-imdb' },
+            standard: { folder: 'default', file: 'standard' },
+          };
+
+          const keys = serverMap[mediaServer] || serverMap.standard;
+          const recommendedFolder = trashNaming.folder[keys.folder] || trashNaming.folder.default;
+          const recommendedFile = trashNaming.file[keys.file] || trashNaming.file.standard;
+
+          // Extract user's current naming (field names vary by service)
+          const namingRecord = userNaming as unknown as Record<string, unknown>;
+          const userFolder = namingRecord.movieFolderFormat ||
+            namingRecord.seriesFolderFormat ||
+            namingRecord.standardMovieFormat;
+          const userFile = namingRecord.standardMovieFormat ||
+            namingRecord.standardEpisodeFormat;
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                mediaServer,
+                yourNaming: {
+                  folder: userFolder,
+                  file: userFile,
+                },
+                trashRecommended: {
+                  folder: recommendedFolder,
+                  file: recommendedFile,
+                },
+                folderMatch: userFolder === recommendedFolder,
+                fileMatch: userFile === recommendedFile,
+                recommendations: [
+                  ...(userFolder !== recommendedFolder ? [`Update folder format to: ${recommendedFolder}`] : []),
+                  ...(userFile !== recommendedFile ? [`Update file format to: ${recommendedFile}`] : []),
+                ],
+              }, null, 2),
+            }],
+          };
+        }
+
+        default:
+          throw new Error(`Unknown tool: ${name}`);
       }
-
-      default:
-        throw new Error(`Unknown tool: ${name}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{ type: "text", text: `Error: ${errorMessage}` }],
+        isError: true,
+      };
     }
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return {
-      content: [{ type: "text", text: `Error: ${errorMessage}` }],
-      isError: true,
-    };
-  }
-});
+  });
+  return server;
+}
 
 // Helper function to format bytes
 function formatBytes(bytes: number): string {
@@ -2050,13 +2054,43 @@ function formatBytes(bytes: number): string {
 }
 
 // Start the server
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error(`*arr MCP server running - configured services: ${configuredServices.map(s => s.name).join(', ')}`);
-}
+// Start the server using Express and StreamableHTTPServerTransport
+const app = express();
+app.use(express.json());
 
-main().catch((error) => {
-  console.error("Fatal error:", error);
-  process.exit(1);
+app.post('/', async (req, res) => {
+  const server = createMcpServer();
+  try {
+    const transport = new StreamableHTTPServerTransport();
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (error) {
+    console.error('Error handling MCP request:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32603,
+          message: 'Internal server error'
+        },
+        id: null
+      });
+    }
+  }
+});
+
+app.get('/', async (req, res) => {
+  res.status(405).json({
+    jsonrpc: '2.0',
+    error: {
+      code: -32000,
+      message: 'Method not allowed. Use POST.'
+    },
+    id: null
+  });
+});
+
+const PORT = parseInt(process.env.PORT || "3000");
+app.listen(PORT, () => {
+  console.error(`*arr MCP server running on port ${PORT} - configured services: ${configuredServices.map(s => s.name).join(', ')}`);
 });
