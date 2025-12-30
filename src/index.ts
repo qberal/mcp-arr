@@ -2097,6 +2097,8 @@ app.get('/sse', async (req, res) => {
   transport.onclose = () => {
     console.error(`Closed SSE session: ${sessionId}`);
     sseTransports.delete(sessionId);
+    // Prevent infinite recursion since server.close() calls transport.close() which calls onclose
+    transport.onclose = undefined;
     server.close();
   };
 
