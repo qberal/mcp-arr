@@ -16,6 +16,7 @@
 import express from "express";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -2077,6 +2078,45 @@ app.post('/', async (req, res) => {
       });
     }
   }
+});
+
+// SSE Support
+const sseTransports = new Map<string, SSEServerTransport>();
+
+app.get('/sse', async (req, res) => {
+  console.error("Received SSE connection request");
+  const transport = new SSEServerTransport('/messages', res);
+  const server = createMcpServer();
+
+  // Use transport's sessionId
+  const sessionId = transport.sessionId;
+  sseTransports.set(sessionId, transport);
+
+  console.error(`Created SSE session: ${sessionId}`);
+
+  transport.onclose = () => {
+    console.error(`Closed SSE session: ${sessionId}`);
+    sseTransports.delete(sessionId);
+    server.close();
+  };
+
+  await server.connect(transport);
+});
+
+app.post('/messages', async (req, res) => {
+  const sessionId = req.query.sessionId as string;
+  if (!sessionId) {
+    res.status(400).send("Missing sessionId");
+    return;
+  }
+
+  const transport = sseTransports.get(sessionId);
+  if (!transport) {
+    res.status(404).send("Session not found");
+    return;
+  }
+
+  await transport.handlePostMessage(req, res);
 });
 
 app.get('/', async (req, res) => {
