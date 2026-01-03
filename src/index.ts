@@ -248,7 +248,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_search_missing",
-      description: "Trigger a search for all missing episodes in a series",
+      description: "Trigger a search for all missing episodes in a series that is ALREADY in your library. Do NOT use this to add new series.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -262,7 +262,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_search_episode",
-      description: "Trigger a search for specific episode(s)",
+      description: "Trigger a search for specific episode(s) that are ALREADY in your library. Do NOT use this to add new series or episodes.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -367,7 +367,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_search_movie",
-      description: "Trigger a search to download a movie that's already in your library",
+      description: "Trigger a search to download a movie that is ALREADY in your library. Do NOT use this to add new movies - use radarr_add_movie instead.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -467,7 +467,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_search_album",
-      description: "Trigger a search for a specific album to download",
+      description: "Trigger a search for a specific album that is ALREADY in your library. Do NOT use this to add new albums - use lidarr_add_artist instead.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -481,7 +481,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_search_missing",
-      description: "Trigger a search for all missing albums for an artist",
+      description: "Trigger a search for all missing albums for an artist that is ALREADY in your library.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -599,7 +599,7 @@ if (clients.readarr) {
     },
     {
       name: "readarr_search_book",
-      description: "Trigger a search for a specific book to download",
+      description: "Trigger a search for a specific book that is ALREADY in your library. Do NOT use this to add new books - use readarr_add_author instead.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -614,7 +614,7 @@ if (clients.readarr) {
     },
     {
       name: "readarr_search_missing",
-      description: "Trigger a search for all missing books for an author",
+      description: "Trigger a search for all missing books for an author that is ALREADY in your library.",
       inputSchema: {
         type: "object" as const,
         properties: {
