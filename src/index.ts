@@ -274,6 +274,44 @@ if (clients.sonarr) {
         },
         required: ["episodeIds"],
       },
+    },
+    {
+      name: "sonarr_add_series",
+      description: "Add a new TV series to Sonarr",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          tvdbId: {
+            type: "number",
+            description: "TVDB ID of the series",
+          },
+          title: {
+            type: "string",
+            description: "Title of the series",
+          },
+          rootFolderPath: {
+            type: "string",
+            description: "Full path to root folder",
+          },
+          qualityProfileId: {
+            type: "number",
+            description: "ID of quality profile to use",
+          },
+          monitored: {
+            type: "boolean",
+            description: "Whether to monitor the series (default: true)",
+          },
+          seasonFolder: {
+            type: "boolean",
+            description: "Whether to create season folders (default: true)",
+          },
+          searchForMissingEpisodes: {
+            type: "boolean",
+            description: "Start search for missing episodes immediately (default: true)",
+          },
+        },
+        required: ["tvdbId", "title", "rootFolderPath", "qualityProfileId"],
+      },
     }
   );
 }
@@ -339,6 +377,40 @@ if (clients.radarr) {
           },
         },
         required: ["movieId"],
+      },
+    },
+    {
+      name: "radarr_add_movie",
+      description: "Add a new movie to Radarr",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          tmdbId: {
+            type: "number",
+            description: "TMDB ID of the movie",
+          },
+          title: {
+            type: "string",
+            description: "Title of the movie",
+          },
+          rootFolderPath: {
+            type: "string",
+            description: "Full path to root folder",
+          },
+          qualityProfileId: {
+            type: "number",
+            description: "ID of quality profile to use",
+          },
+          monitored: {
+            type: "boolean",
+            description: "Whether to monitor the movie (default: true)",
+          },
+          searchForMovie: {
+            type: "boolean",
+            description: "Start search for movie immediately (default: true)",
+          },
+        },
+        required: ["tmdbId", "title", "rootFolderPath", "qualityProfileId"],
       },
     }
   );
@@ -434,6 +506,44 @@ if (clients.lidarr) {
         },
         required: [],
       },
+    },
+    {
+      name: "lidarr_add_artist",
+      description: "Add a new artist to Lidarr",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          foreignArtistId: {
+            type: "string",
+            description: "MusicBrainz Artist ID",
+          },
+          artistName: {
+            type: "string",
+            description: "Name of the artist",
+          },
+          rootFolderPath: {
+            type: "string",
+            description: "Full path to root folder",
+          },
+          qualityProfileId: {
+            type: "number",
+            description: "ID of quality profile to use",
+          },
+          metadataProfileId: {
+            type: "number",
+            description: "ID of metadata profile to use",
+          },
+          monitored: {
+            type: "boolean",
+            description: "Whether to monitor the artist (default: true)",
+          },
+          searchForMissingAlbums: {
+            type: "boolean",
+            description: "Start search for missing albums immediately (default: true)",
+          },
+        },
+        required: ["foreignArtistId", "artistName", "rootFolderPath", "qualityProfileId", "metadataProfileId"],
+      },
     }
   );
 }
@@ -528,6 +638,44 @@ if (clients.readarr) {
           },
         },
         required: [],
+      },
+    },
+    {
+      name: "readarr_add_author",
+      description: "Add a new author to Readarr",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          foreignAuthorId: {
+            type: "string",
+            description: "Goodreads Author ID",
+          },
+          authorName: {
+            type: "string",
+            description: "Name of the author",
+          },
+          rootFolderPath: {
+            type: "string",
+            description: "Full path to root folder",
+          },
+          qualityProfileId: {
+            type: "number",
+            description: "ID of quality profile to use",
+          },
+          metadataProfileId: {
+            type: "number",
+            description: "ID of metadata profile to use",
+          },
+          monitored: {
+            type: "boolean",
+            description: "Whether to monitor the author (default: true)",
+          },
+          searchForMissingBooks: {
+            type: "boolean",
+            description: "Start search for missing books immediately (default: true)",
+          },
+        },
+        required: ["foreignAuthorId", "authorName", "rootFolderPath", "qualityProfileId", "metadataProfileId"],
       },
     }
   );
@@ -1187,6 +1335,43 @@ function createMcpServer() {
           };
         }
 
+        case "sonarr_add_series": {
+          if (!clients.sonarr) throw new Error("Sonarr not configured");
+          const params = args as {
+            tvdbId: number;
+            title: string;
+            rootFolderPath: string;
+            qualityProfileId: number;
+            monitored?: boolean;
+            seasonFolder?: boolean;
+            searchForMissingEpisodes?: boolean;
+          };
+
+          const series = await clients.sonarr.addSeries({
+            tvdbId: params.tvdbId,
+            title: params.title,
+            rootFolderPath: params.rootFolderPath,
+            qualityProfileId: params.qualityProfileId,
+            monitored: params.monitored,
+            seasonFolder: params.seasonFolder,
+          });
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Added series: ${series.title}`,
+                series: {
+                  id: series.id,
+                  title: series.title,
+                  path: series.path,
+                }
+              }, null, 2),
+            }],
+          };
+        }
+
         // Radarr handlers
         case "radarr_get_movies": {
           if (!clients.radarr) throw new Error("Radarr not configured");
@@ -1274,6 +1459,41 @@ function createMcpServer() {
                 success: true,
                 message: `Search triggered for movie`,
                 commandId: result.id,
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "radarr_add_movie": {
+          if (!clients.radarr) throw new Error("Radarr not configured");
+          const params = args as {
+            tmdbId: number;
+            title: string;
+            rootFolderPath: string;
+            qualityProfileId: number;
+            monitored?: boolean;
+            searchForMovie?: boolean;
+          };
+
+          const movie = await clients.radarr.addMovie({
+            tmdbId: params.tmdbId,
+            title: params.title,
+            rootFolderPath: params.rootFolderPath,
+            qualityProfileId: params.qualityProfileId,
+            monitored: params.monitored,
+          });
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Added movie: ${movie.title}`,
+                movie: {
+                  id: movie.id,
+                  title: movie.title,
+                  path: movie.path,
+                }
               }, null, 2),
             }],
           };
@@ -1422,6 +1642,43 @@ function createMcpServer() {
           };
         }
 
+        case "lidarr_add_artist": {
+          if (!clients.lidarr) throw new Error("Lidarr not configured");
+          const params = args as {
+            foreignArtistId: string;
+            artistName: string;
+            rootFolderPath: string;
+            qualityProfileId: number;
+            metadataProfileId: number;
+            monitored?: boolean;
+            searchForMissingAlbums?: boolean;
+          };
+
+          const artist = await clients.lidarr.addArtist({
+            foreignArtistId: params.foreignArtistId,
+            artistName: params.artistName,
+            rootFolderPath: params.rootFolderPath,
+            qualityProfileId: params.qualityProfileId,
+            metadataProfileId: params.metadataProfileId,
+            monitored: params.monitored,
+          });
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Added artist: ${artist.artistName}`,
+                artist: {
+                  id: artist.id,
+                  name: artist.artistName,
+                  path: artist.path,
+                }
+              }, null, 2),
+            }],
+          };
+        }
+
         // Readarr handlers
         case "readarr_get_authors": {
           if (!clients.readarr) throw new Error("Readarr not configured");
@@ -1557,6 +1814,43 @@ function createMcpServer() {
                   releaseDate: b.releaseDate,
                   monitored: b.monitored,
                 })),
+              }, null, 2),
+            }],
+          };
+        }
+
+        case "readarr_add_author": {
+          if (!clients.readarr) throw new Error("Readarr not configured");
+          const params = args as {
+            foreignAuthorId: string;
+            authorName: string;
+            rootFolderPath: string;
+            qualityProfileId: number;
+            metadataProfileId: number;
+            monitored?: boolean;
+            searchForMissingBooks?: boolean;
+          };
+
+          const author = await clients.readarr.addAuthor({
+            foreignAuthorId: params.foreignAuthorId,
+            authorName: params.authorName,
+            rootFolderPath: params.rootFolderPath,
+            qualityProfileId: params.qualityProfileId,
+            metadataProfileId: params.metadataProfileId,
+            monitored: params.monitored,
+          });
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Added author: ${author.authorName}`,
+                author: {
+                  id: author.id,
+                  name: author.authorName,
+                  path: author.path,
+                }
               }, null, 2),
             }],
           };
